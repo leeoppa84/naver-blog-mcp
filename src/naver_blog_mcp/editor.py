@@ -323,6 +323,28 @@ async def close_draft_list(page: Page, frame: Frame) -> None:
         await asyncio.sleep(0.5)
 
 
+async def ensure_draft_list_closed(page: Page, frame: Frame) -> None:
+    """임시저장 목록 레이어가 열려 있으면 닫는다. 닫기 버튼 → Escape 순으로 시도.
+
+    끝내 안 닫히면 예외를 던진다. 레이어가 남은 채로 발행 버튼을 누르면
+    클릭이 가로막혀 원인을 알기 어려운 타임아웃이 나기 때문이다.
+    """
+    for attempt in range(4):
+        if not await _draft_layer_open(frame):
+            return
+        if attempt % 2 == 0:
+            try:
+                await close_draft_list(page, frame)
+            except Exception:
+                pass  # 닫기 버튼이 가려졌거나 사라졌으면 Escape 로 넘어간다
+        else:
+            await page.keyboard.press("Escape")
+            await asyncio.sleep(0.6)
+    if await _draft_layer_open(frame):
+        raise EditorError(
+            "임시저장 목록 레이어가 닫히지 않습니다 — selectors.DRAFT_LAYER_CLOSE 확인")
+
+
 async def list_drafts(page: Page, frame: Frame) -> list[tuple[str, str]]:
     """[(제목, 저장일시), ...]. 최신순으로 나온다."""
     await open_draft_list(page, frame)
@@ -407,6 +429,9 @@ async def load_draft(page: Page, frame: Frame, title: str = "") -> str:
     items = await _locate_all(frame, S.DRAFT_ITEM)
     await items.nth(idx).click()
     await asyncio.sleep(3.0)  # 불러오기는 확인 팝업 없이 바로 반영된다
+    # 불러온 뒤 목록 레이어가 닫히지 않고 남는 경우가 있다(2026-11-09 실측).
+    # 남아 있으면 dimmed 배경이 발행 버튼 클릭을 30초 동안 가로막고 타임아웃 난다.
+    await ensure_draft_list_closed(page, frame)
     if await title_is_empty(frame):
         raise EditorError("불러왔는데 제목이 비어 있습니다 — 불러오기 실패로 보입니다")
     return drafts[idx][0]
