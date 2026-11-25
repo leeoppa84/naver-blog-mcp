@@ -202,6 +202,34 @@ VIDEO_COMPONENT = [".se-component.se-oembed"]
 VIDEO_YOUTUBE = ".se-oembed-youtube"
 VIDEO_TITLE = ".se-oembed-youtube-title"
 
+# ---------------------------------------------------------------- 내 동영상 파일 올리기
+# 툴바 '동영상' -> 업로더 팝업(일반 동영상 / 360VR 탭) -> '동영상 추가' -> 파일 다이얼로그
+# -> 목록에 "업로드 완료" -> 제목(필수, 최대 40자) 입력 -> '완료'.  [실측 2026-11-25]
+# 툴바 버튼은 곧장 파일 다이얼로그를 띄우지 않는다(파일 첨부와 같은 2단계).
+# 업로더는 nvu_* 클래스(네이버 동영상 업로더)를 쓰고, 파일을 넣으면 팝업 안이
+# nvu_section_append -> nvu_section_upload 로 통째로 바뀐다. '동영상 추가' 버튼 클래스도
+# nvu_local -> nvu_btn_local 로 달라지므로 data-logcode 를 앞에 둔다.
+# 4MB, 15초 mp4 는 약 11초 만에 "업로드 완료" 가 떴다. 인코딩은 그 뒤 서버에서 따로 돈다.
+# 완료 뒤 본문에는 se-video 컴포넌트와 빈 본문 컴포넌트가 생긴다.
+# 영상 컴포넌트에도 '대표' 버튼(REP_IMAGE_BUTTON)이 붙는다 — 섬네일 후보가 된다.
+VIDEO_UPLOAD_BUTTON = ["button[data-name='video'].se-video-toolbar-button", "button[data-name='video']"]
+VIDEO_UPLOAD_POPUP = [".se-popup-video-upload"]
+VIDEO_UPLOAD_LOCAL = [
+    ".se-popup-video-upload button[data-logcode='lmvup.attmv']",
+    ".se-popup-video-upload button.nvu_local",
+]
+# 파일별 상태 글자. "업로드 완료" 가 되면 끝난 것이다.
+VIDEO_UPLOAD_STATE = ".se-popup-video-upload .nvu_file_item .nvu_state"
+VIDEO_UPLOAD_DONE_TEXT = "업로드 완료"
+# 상태 글자에 이 낱말이 들어가면 실패로 본다. (실패 화면은 아직 못 봤다 — 미실측)
+VIDEO_UPLOAD_FAIL_HINTS = ("실패", "오류", "불가", "초과")
+VIDEO_UPLOAD_TITLE = [".se-popup-video-upload #nvu_inp_box_title", ".se-popup-video-upload input[data-logcode='lmvup.subject']"]
+VIDEO_UPLOAD_SUBMIT = [".se-popup-video-upload button.nvu_btn_submit"]
+VIDEO_UPLOAD_CLOSE = [".se-popup-video-upload button.nvu_btn_close"]
+VIDEO_UPLOAD_TITLE_MAX = 40
+LOCAL_VIDEO_COMPONENT = ["[data-a11y-title='동영상']", ".se-component.se-video"]
+LOCAL_VIDEO_TITLE = ".se-video-title-text"
+
 # 발행 패널 열기  [실측]
 # button:has-text('발행') 은 쓰지 말 것 — 숨김 상태인 "예약 발행 0건" 이 먼저 잡힌다.
 PUBLISH_OPEN = [

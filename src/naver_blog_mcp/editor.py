@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import unicodedata
 from pathlib import Path
@@ -1324,6 +1325,100 @@ async def insert_video(page: Page, frame: Frame, url: str) -> str:
     return (await player.locator(S.VIDEO_TITLE).first.inner_text()).strip()
 
 
+def _video_timeout() -> float:
+    """동영상 업로드 대기 시간(초). NAVER_VIDEO_TIMEOUT 으로 바꾼다. 기본 5분."""
+    try:
+        return max(30.0, float(os.getenv("NAVER_VIDEO_TIMEOUT", "300")))
+    except ValueError:
+        return 300.0
+
+
+async def _close_video_uploader(page: Page, frame: Frame) -> None:
+    """업로더 팝업을 닫는다. 실패 경로에서만 쓴다 — 열어둔 채면 dim 이 다음 클릭을 막는다."""
+    close = await S.first(frame, S.VIDEO_UPLOAD_CLOSE, timeout=1500)
+    if close:
+        try:
+            await close.click()
+        except Exception:
+            pass
+    await asyncio.sleep(0.8)
+
+
+async def insert_local_video(page: Page, frame: Frame, path: str, title: str) -> str:
+    """내 컴퓨터의 동영상 파일을 네이버 동영상으로 올린다. 들어간 영상 제목을 반환.
+
+    툴바 '동영상' -> 업로더 팝업 '동영상 추가' -> 파일 다이얼로그 가로채기 -> "업로드 완료"
+    대기 -> 제목 입력(필수) -> '완료'. (2026-11-25 실측, selectors.VIDEO_UPLOAD_* 참조)
+    시간 안에 안 끝나거나 실패 표시가 뜨면 팝업을 닫고 EditorError.
+    """
+    p = Path(path).expanduser().resolve()
+    if not p.exists():
+        raise EditorError(f"동영상 없음: {p}")
+    title = (title.strip() or p.stem)[:S.VIDEO_UPLOAD_TITLE_MAX]
+
+    btn = await S.first(frame, S.VIDEO_UPLOAD_BUTTON)
+    if not btn:
+        raise EditorError("동영상 버튼을 못 찾음 — selectors.VIDEO_UPLOAD_BUTTON 갱신 필요")
+    before = await _count(frame, S.LOCAL_VIDEO_COMPONENT)
+    await btn.click()
+    local = await S.first(frame, S.VIDEO_UPLOAD_LOCAL, timeout=8000)
+    if not local:
+        await _close_video_uploader(page, frame)
+        raise EditorError("'동영상 추가' 버튼을 못 찾음 — selectors.VIDEO_UPLOAD_LOCAL 갱신 필요")
+    async with page.expect_file_chooser(timeout=10_000) as fc_info:
+        await local.click()
+    chooser = await fc_info.value
+    await chooser.set_files(str(p))
+
+    # 업로드 완료 판정은 목록의 상태 글자다. 진행 막대는 100% 가 된 뒤에도 잠깐 처리 중이다.
+    limit = _video_timeout()
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + limit
+    states: list[str] = []
+    while True:
+        try:
+            states = [s.strip() for s in await frame.locator(S.VIDEO_UPLOAD_STATE).all_inner_texts()]
+        except Exception:
+            states = []
+        if states and all(s == S.VIDEO_UPLOAD_DONE_TEXT for s in states):
+            break
+        bad = [s for s in states if any(h in s for h in S.VIDEO_UPLOAD_FAIL_HINTS)]
+        if bad:
+            await _close_video_uploader(page, frame)
+            raise EditorError(f"동영상 업로드 실패({bad[0]}): {p.name}")
+        if loop.time() >= deadline:
+            await _close_video_uploader(page, frame)
+            raise EditorError(f"동영상 업로드가 {limit:.0f}초 안에 안 끝남(상태: {states or '없음'}): {p.name}")
+        await asyncio.sleep(1.0)
+
+    inp = await S.first(frame, S.VIDEO_UPLOAD_TITLE, timeout=5000)
+    if not inp:
+        await _close_video_uploader(page, frame)
+        raise EditorError("동영상 제목 칸을 못 찾음 — selectors.VIDEO_UPLOAD_TITLE 갱신 필요")
+    await inp.click()
+    await inp.fill("")
+    await inp.press_sequentially(title, delay=15)
+    if (await inp.input_value()).strip() != title:
+        await _close_video_uploader(page, frame)
+        raise EditorError(f"동영상 제목이 안 들어감: {title}")
+
+    submit = await S.first(frame, S.VIDEO_UPLOAD_SUBMIT, timeout=3000)
+    if not submit:
+        await _close_video_uploader(page, frame)
+        raise EditorError("동영상 '완료' 버튼을 못 찾음 — selectors.VIDEO_UPLOAD_SUBMIT 갱신 필요")
+    await submit.click()
+    try:
+        await _wait_added(frame, S.LOCAL_VIDEO_COMPONENT, before, "동영상")
+    except EditorError:
+        await _close_video_uploader(page, frame)
+        raise
+    comp = frame.locator(S.LOCAL_VIDEO_COMPONENT[1]).nth(before)
+    try:
+        return (await comp.locator(S.LOCAL_VIDEO_TITLE).first.inner_text(timeout=3000)).strip()
+    except Exception:
+        return title
+
+
 # ------------------------------------------------------------ 본문 조립
 
 async def write_post(
@@ -1411,8 +1506,13 @@ async def write_post(
                     # 검색 결과 중 첫 번째를 쓰므로 무엇을 골랐는지 남긴다.
                     notes.append(f"{i}:장소({picked[:24]})")
                 elif b.type == "video":
+                    from .ir import is_web_video, split_video_arg
                     try:
-                        picked = await insert_video(page, frame, b.raw)
+                        if is_web_video(b.raw):
+                            picked = await insert_video(page, frame, b.raw)
+                        else:
+                            vpath, vtitle = split_video_arg(b.raw)
+                            picked = await insert_local_video(page, frame, vpath, vtitle)
                         notes.append(f"{i}:영상({picked[:30]})")
                     except EditorError as e:
                         notes.append(f"{i}:영상 누락({e})")

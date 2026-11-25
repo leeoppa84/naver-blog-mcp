@@ -93,6 +93,44 @@ def test_preflight_rejects_non_video_url():
     assert problems == []
 
 
+def test_split_video_arg():
+    from naver_blog_mcp.ir import is_web_video, split_video_arg
+    assert is_web_video("https://youtu.be/MdyffIg1PpQ")
+    assert not is_web_video("videos/타건-영상.mp4")
+    assert not is_web_video(r"C:\Users\x\타건-영상.mp4")
+    assert split_video_arg("videos/타건-영상.mp4") == ("videos/타건-영상.mp4", "타건 영상")
+    assert split_video_arg("videos/a_b.mp4 | 키보드 소리") == ("videos/a_b.mp4", "키보드 소리")
+    assert len(split_video_arg("v.mp4 | " + "가" * 50)[1]) == 40  # 네이버 제목 한도
+
+
+def test_local_video_directive_goes_manual():
+    from naver_blog_mcp.ir import segment
+    blocks = parse_markdown("앞 문단\n\n:::video videos/타건-영상.mp4:::\n\n뒤 문단\n")
+    assert [b.type for b in blocks] == ["paragraph", "video", "paragraph"]
+    assert blocks[1].raw == "videos/타건-영상.mp4"
+    assert [s.kind for s in segment(blocks)] == ["html", "manual", "html"]
+
+
+def test_preflight_local_video(tmp_path):
+    from naver_blog_mcp.server import preflight
+    (tmp_path / "videos").mkdir()
+    (tmp_path / "videos" / "타건-영상.mp4").write_bytes(b"\0" * 16)
+    (tmp_path / "videos" / "메모.txt").write_text("x", encoding="utf-8")
+    out, problems = preflight(tmp_path, "글\n\n:::video videos/타건-영상.mp4:::\n")
+    assert problems == []
+    want = tmp_path / "videos" / "타건-영상.mp4"
+    assert f":::video {want} | 타건 영상:::" in out  # 폴더 기준 절대경로로 풀리고 제목이 붙는다
+    out, problems = preflight(tmp_path, ":::video videos/타건-영상.mp4 | 타건 소리:::\n")
+    assert out.strip() == f":::video {want} | 타건 소리:::"
+    # 풀린 결과를 다시 파싱해도 경로와 제목이 그대로 나와야 한다(편집기가 이걸 받는다)
+    from naver_blog_mcp.ir import split_video_arg
+    assert split_video_arg(parse_markdown(out)[0].raw) == (str(want), "타건 소리")
+    _, problems = preflight(tmp_path, ":::video videos/없음.mp4:::\n")
+    assert problems == ["동영상 없음: videos/없음.mp4"]
+    _, problems = preflight(tmp_path, ":::video videos/메모.txt:::\n")
+    assert problems and problems[0].startswith("동영상 파일이 아님")
+
+
 def test_divider_style_goes_manual(monkeypatch=None):
     import importlib, os
     os.environ["NAVER_DIVIDER_STYLE"] = "line2"

@@ -53,7 +53,7 @@ DUMP = """
     : c.classList.contains('se-horizontalLine') ? 'hr'
     : c.classList.contains('se-image') ? 'image'
     : c.classList.contains('se-material') ? 'material'
-    : c.classList.contains('se-oembed') ? 'video'
+    : c.classList.contains('se-oembed') || c.classList.contains('se-video') ? 'video'
     : c.classList.contains('se-documentTitle') ? 'title' : 'other';
   if (kind === 'hr' || kind === 'material' || kind === 'image' || kind === 'video')
     return [{kind, t: kind === 'image' || kind === 'hr' ? '' : c.innerText.split(String.fromCharCode(10)).join(' '), style: c.className}];
@@ -129,6 +129,7 @@ async def main(args) -> int:
         links = [s for r in rows for s in r["style"].split() if s.startswith("L:")]
         want_links = len(re.findall(r"\]\(https?://", body))
         videos = [r["t"][:30] for r in rows if r["kind"] == "video"]
+        # 유튜브 주소(se-oembed)와 내 동영상 파일(se-video)을 함께 센다.
         want_videos = len(re.findall(r"^\s*:::\s*video\s", body, re.M))
         log("서식 이상:", bad or 0, "| 붙은 소제목:", glued or 0, "| 링크:", links,
             "| 그림:", sum(1 for r in rows if r["kind"] == "image"), "| 구분선:", sum(1 for r in rows if r["kind"] == "hr"),

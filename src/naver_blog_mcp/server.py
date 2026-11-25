@@ -40,7 +40,7 @@ from .editor import (
     title_is_empty,
     write_post,
 )
-from .ir import YOUTUBE_URL
+from .ir import VIDEO_EXTS, YOUTUBE_URL, is_web_video, split_video_arg
 from .session import Session, snapshot
 
 mcp = MCPServer("naver-blog")
@@ -136,6 +136,8 @@ async def create_draft(
     둘 다 로컬 파일 경로여야 한다 (URL 불가). 파일은 개당 10MB 제한.
     수식은 :::formula x^2+y^2=z^2:::, 장소는 :::place 강남역::: 이다.
     장소는 검색 결과 중 첫 번째를 쓰며, 무엇을 골랐는지 결과에 표시된다.
+    영상은 :::video 유튜브주소::: 또는 :::video 로컬경로 | 영상 제목::: 이다.
+    로컬 동영상은 네이버 동영상으로 올라간다(제목 생략 시 파일 이름, 최대 40자).
 
     글과 이미지가 한 폴더에 있으면 create_draft_from_folder 가 편하다.
     """
@@ -200,6 +202,8 @@ _IMG_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 _FILE_RE = re.compile(r":::file\s+([^:]+):::")
 _VIDEO_RE = re.compile(r"^\s*:::\s*video\s+(.+?)\s*:::\s*$", re.M)
 _MAX_BYTES = 10 * 1024 * 1024
+# 네이버 동영상 업로더 안내 문구: "파일의 용량은 8GB / 420분까지"
+_MAX_VIDEO_BYTES = 8 * 1024 ** 3
 
 
 def _abs_local(base: Path, raw: str) -> Path:
@@ -229,10 +233,25 @@ def preflight(base: Path, markdown: str) -> tuple[str, list[str]]:
             problems.append(f"첨부 없음: {m.group(1)}")
         return f":::file {p}:::"
 
+    def fix_video(m: re.Match) -> str:
+        arg = m.group(1).strip()
+        if is_web_video(arg):
+            if not YOUTUBE_URL.match(arg):
+                problems.append(f"유튜브 영상 주소가 아님: {arg}")
+            return m.group(0)
+        # 웹 주소가 아니면 내 동영상 파일이다. 이미지처럼 글 폴더 기준으로 푼다.
+        raw, title = split_video_arg(arg)
+        p = _abs_local(base, raw)
+        if not p.exists():
+            problems.append(f"동영상 없음: {raw}")
+        elif p.suffix.lower() not in VIDEO_EXTS:
+            problems.append(f"동영상 파일이 아님: {raw} (받는 확장자: {', '.join(sorted(VIDEO_EXTS))})")
+        elif p.stat().st_size > _MAX_VIDEO_BYTES:
+            problems.append(f"8GB 초과: {raw}")
+        return f":::video {p} | {title}:::"
+
     out = _FILE_RE.sub(fix_file, _IMG_RE.sub(fix_img, markdown))
-    for m in _VIDEO_RE.finditer(out):
-        if not YOUTUBE_URL.match(m.group(1).strip()):
-            problems.append(f"유튜브 영상 주소가 아님: {m.group(1).strip()}")
+    out = _VIDEO_RE.sub(fix_video, out)
     return out, problems
 
 
@@ -323,9 +342,10 @@ async def create_draft_from_folder(
     """글 파일과 이미지가 같은 폴더에 있을 때 폴더째 임시저장한다. 발행하지 않는다.
 
     - 이미지는 폴더 기준 상대경로로 적어도 된다(`![캡션](images/01-x.png)`).
+    - 내 동영상도 같다(`:::video videos/x.mp4:::`, `:::video videos/x.mp4 | 영상 제목:::`).
     - 같은 폴더의 meta.json 에서 제목·카테고리·태그를 읽는다. 인자로 준 값이 우선.
     - 글 첫 줄이 '# 제목' 이면 제목으로 쓰고 본문에서 뺀다.
-    - 브라우저를 열기 전에 이미지부터 확인한다. 하나라도 없으면 아무것도 하지 않는다.
+    - 브라우저를 열기 전에 이미지·첨부·동영상부터 확인한다. 하나라도 없으면 아무것도 하지 않는다.
     """
     base = Path(folder).expanduser().resolve()
     src = base / markdown_file

@@ -94,12 +94,40 @@ _IMG = re.compile(r"^!\[(?P<alt>[^\]]*)\]\((?P<src>[^)]+)\)\s*$")
 # :::file 경로:::  :::formula x^2+y^2=z^2:::  :::place 강남역:::
 # :::news 매체 | 기사 제목:::  :::stock 072950:::  :::book 책 제목:::  (글감 카드, material.py)
 # :::video https://www.youtube.com/watch?v=...:::  (유튜브 영상 플레이어)
+# :::video videos/타건-영상.mp4:::  :::video videos/타건-영상.mp4 | 영상 제목:::  (내 동영상 파일 올리기)
 _DIRECTIVE = re.compile(r"^:::\s*(?P<name>[a-z]+)\s+(?P<arg>.+?)\s*:::$")
 _KNOWN_DIRECTIVES = {"file", "formula", "place", "news", "stock", "book", "video"}
 
 # 에디터가 영상 플레이어(se-oembed)로 바꾸는 유튜브 주소. 다른 주소는 링크 카드가 되므로 받지 않는다.
 YOUTUBE_URL = re.compile(
     r"^https?://(?:www\.|m\.)?(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|live/)|youtu\.be/)[\w-]{11}(?:[?&#][^\s]*)?$")
+
+# :::video ...::: 의 인자가 웹 주소인지. 아니면 내 컴퓨터의 동영상 파일 경로로 본다.
+_WEB_ADDR = re.compile(r"^[a-z][a-z0-9+.-]*://", re.I)
+# 네이버 동영상 업로더가 받는 흔한 확장자. 그 밖의 파일은 브라우저를 열기 전에 막는다.
+VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".wmv", ".mkv", ".webm", ".mpg", ".mpeg", ".flv", ".3gp", ".asf", ".ts", ".mts"}
+
+
+def is_web_video(arg: str) -> bool:
+    return bool(_WEB_ADDR.match(arg.strip()))
+
+
+def video_title_default(path: str) -> str:
+    """제목을 안 적었을 때 쓸 영상 제목. 파일 이름에서 확장자를 떼고 -, _ 를 띄어쓰기로."""
+    from pathlib import PurePath
+    stem = PurePath(path.replace("\\", "/")).stem
+    return re.sub(r"[-_]+", " ", stem).strip() or "동영상"
+
+
+def split_video_arg(arg: str) -> tuple[str, str]:
+    """'경로 | 제목' 을 (경로, 제목) 으로. 제목이 없으면 파일 이름에서 만든다.
+
+    네이버 업로더는 제목이 필수이고 최대 40자라 그 길이로 자른다.
+    """
+    path, _, title = arg.partition("|")
+    path = path.strip().strip('"').strip("'")
+    title = title.strip() or video_title_default(path)
+    return path, title[:40]
 
 
 _TABLE_SEP = re.compile(r"^\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?$")
@@ -167,7 +195,7 @@ def parse_markdown(md: str) -> list[Block]:
     지원: 제목(1~3), 문단, 인용, 순서/비순서 목록, 코드블록, 이미지, 구분선, 표,
           파일 첨부(:::file 경로:::), 수식(:::formula ...:::), 장소(:::place 검색어:::),
           글감 카드(:::news 매체 | 제목:::, :::stock 코드:::, :::book 제목:::),
-          유튜브 영상(:::video 주소:::)
+          유튜브 영상(:::video 주소:::), 내 동영상 파일(:::video 경로 | 제목:::)
     미지원(문단으로 강등): 각주, 중첩목록 3단계 이상
 
     표는 GFM 파이프 문법이다. 붙여넣기로 se-table 컴포넌트가 되는 것을 실측했다.
